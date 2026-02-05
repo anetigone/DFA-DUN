@@ -117,6 +117,7 @@ class Trainer:
         # 记录epoch结束
         epoch_metrics = metrics_tracker.get_metrics()
         self.logger.log_epoch_end(epoch, epoch_metrics, phase='train')
+        self.logger.logger.info(self.model.prox_nets[0].global_scale.item())
 
         return epoch_metrics
 
