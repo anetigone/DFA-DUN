@@ -1,4 +1,17 @@
+# Training results (organized by experiment)
+results/**
+
+# Legacy paths (kept for backward compatibility)
 logs/**
+checkpoints/**
+
+# Data
 data/**
+
+# Python
 **/__pycache__/
 *.pyc
+
+# Other
+prompt*
+test/**

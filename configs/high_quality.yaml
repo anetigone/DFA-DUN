@@ -1,0 +1,37 @@
+# 高质量训练配置 (用于最终训练)
+
+# Model Configuration
+model:
+  K: 4
+
+# Training Configuration
+training:
+  lr: 1.0e-5
+  batch_size: 4
+  epochs: 300
+  weight_decay: 1.0e-4
+
+# Loss Weights
+loss:
+  lambda_freq: 0.15
+  lambda_cls: 0.1
+
+# Data Configuration
+data:
+  train_root: './data/Rain100L'
+  val_root: './data/Rain100L'
+  num_workers: 8
+  pin_memory: true
+
+# Checkpoint Configuration
+checkpoint:
+  save_dir: './checkpoints/high_quality'
+  save_interval: 5
+
+# Logging Configuration
+logging:
+  log_dir: './logs/high_quality'
+  log_interval: 100
+
+# Device Configuration
+device: 'cuda'

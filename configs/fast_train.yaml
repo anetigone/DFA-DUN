@@ -1,0 +1,37 @@
+# 快速训练配置 (用于调试和快速实验)
+
+# Model Configuration
+model:
+  K: 4
+
+# Training Configuration
+training:
+  lr: 1.0e-4
+  batch_size: 16
+  epochs: 20
+  weight_decay: 1.0e-4
+
+# Loss Weights
+loss:
+  lambda_freq: 0.1
+  lambda_cls: 0.05
+
+# Data Configuration
+data:
+  train_root: './data/Rain100L'
+  val_root: './data/Rain100L'
+  num_workers: 4
+  pin_memory: true
+
+# Checkpoint Configuration
+checkpoint:
+  save_dir: './checkpoints/fast'
+  save_interval: 5
+
+# Logging Configuration
+logging:
+  log_dir: './logs/fast'
+  log_interval: 50
+
+# Device Configuration
+device: 'cuda'

@@ -28,12 +28,15 @@ class DFA_DUN(nn.Module):
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.Linear):
-                nn.init.xavier_normal_(m.weight)
+                nn.init.xavier_normal_(m.weight)    
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.BatchNorm2d):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Parameter):
+                if 'mu' in m.name:
+                    nn.init.constant_(m, 1.0)
 
     def forward(self, y, mode='identity', kernel=None):
         z = y

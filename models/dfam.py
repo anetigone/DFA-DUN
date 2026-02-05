@@ -38,8 +38,16 @@ class DFAM(nn.Module):
             nn.Linear(intermediate_dim, kernel_size * kernel_size),
         )
 
+        # 添加层归一化以提高稳定性
+        self.ln1 = nn.LayerNorm(in_channels * num_bands)
+        self.ln2 = nn.LayerNorm(intermediate_dim)
+
     def forward(self, x):
         batch, c, h, w = x.shape
+
+        # 层归一化
+        x_norm = F.layer_norm(x, x.shape[1:])
+        x_fp32 = x_norm.float()
         
         # 1. 频域处理 (强制转为 float32 提高数值稳定性)
         x_fp32 = x.float()
@@ -68,13 +76,18 @@ class DFAM(nn.Module):
             
         # 拼接特征: [B, num_bands * C] (例如 16 * 12)
         base_feat_vec = torch.cat(pooled_features, dim=1)
+        # 添加层归一化
+        base_feat_vec = self.ln1(base_feat_vec)
         
         # 2. 通过全连接层提取高层特征
         # 这里的 freq_extractor 现在接受 [B, 12] 输入
         base_feat = self.freq_extractor(base_feat_vec) 
+        base_feat = self.ln2(base_feat)
+        base_feat = torch.tanh(base_feat)
         
         # 3. 得到各个分支输出
         params = self.hyper_params(base_feat).view(batch, -1, 1, 1)
+        params = torch.tanh(params) # 限制范围在 [-1, 1]
         gates = self.degrad_classifier(base_feat)
         raw_kernel = self.kernel_predictor(base_feat)
         
@@ -89,18 +102,27 @@ class DFAM(nn.Module):
 class ModulatedConv2d(nn.Module):
     def __init__(self, in_nc, out_nc, kernel_size, stride=1, padding=1, hyper_dim=64):
         super().__init__()
+        # 使用谱归一化
         self.conv = nn.Conv2d(in_nc, out_nc, kernel_size, stride, padding)
-        # 产生缩放(gamma)和偏移(beta)
-        self.modulation = nn.Linear(hyper_dim, in_nc * 2) 
+        self.conv = torch.nn.utils.spectral_norm(self.conv)
+        
+        self.modulation = nn.Linear(hyper_dim, in_nc * 2)
+        # 初始化调制层为接近零输出
+        nn.init.normal_(self.modulation.weight, mean=0.0, std=0.01)
+        nn.init.constant_(self.modulation.bias, 0.0)
 
     def forward(self, x, hyper_feat):
-        # hyper_feat shape: [B, hyper_dim, 1, 1]
-        stats = self.modulation(hyper_feat.view(x.shape[0], -1)).view(x.shape[0], 2, -1, 1, 1)
-        gamma, beta = stats[:, 0], stats[:, 1]
+        # 限制输入范围
+        x = torch.clamp(x, -10.0, 10.0)
         
-        # 限制 gamma 的范围，防止数值爆炸
-        gamma = torch.tanh(gamma) + 1.0 # 范围控制在 [0, 2]
+        stats = self.modulation(hyper_feat.view(x.shape[0], -1))
+        # 使用 sigmoid 确保 gamma 在 (0,1) 范围内，beta 在 (-0.5,0.5)
+        stats = torch.sigmoid(stats) - 0.5
+        stats = stats.view(x.shape[0], 2, -1, 1, 1)
+        gamma, beta = stats[:, 0] + 1.0, stats[:, 1]  # gamma ~ [0.5, 1.5], beta ~ [-0.5, 0.5]
         
-        # 作用于输入特征 (类似于 Feature-wise Linear Modulation, FiLM)
-        x = x * gamma + beta
-        return self.conv(x)
+        # 应用调制
+        x_mod = x * gamma + beta
+        x_mod = torch.clamp(x_mod, -5.0, 5.0)
+        
+        return self.conv(x_mod)

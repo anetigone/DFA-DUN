@@ -24,7 +24,11 @@ class Trainer:
 
         # 初始化日志系统
         if logger is None:
-            self.logger = TrainingLogger(log_dir=config.get('log_dir', './logs'))
+            self.logger = TrainingLogger(
+                log_dir=config.get('log_dir', './logs'),
+                exp_name=config.get('exp_name', None),
+                create_exp_subdir=False  # 不再创建子目录,直接使用传入的log_dir
+            )
         else:
             self.logger = logger
 
@@ -38,6 +42,9 @@ class Trainer:
         # 记录epoch开始
         current_lr = self.optimizer.param_groups[0]['lr']
         self.logger.log_epoch_start(epoch, self.config['epochs'], current_lr)
+
+        # 添加梯度监控
+        gradient_norms = []
 
         pbar = tqdm(self.train_loader, desc=f"Epoch {epoch}")
 
@@ -61,6 +68,16 @@ class Trainer:
                 continue  # 跳过这个batch
 
             self.scaler.scale(loss).backward()
+
+            # 检查梯度
+            total_norm = 0
+            for p in self.model.parameters():
+                if p.grad is not None:
+                    param_norm = p.grad.data.norm(2)
+                    total_norm += param_norm.item() ** 2
+            total_norm = total_norm ** 0.5
+            
+            gradient_norms.append(total_norm)
 
             # 梯度裁剪 (防止梯度爆炸)
             self.scaler.unscale_(self.optimizer)
@@ -136,6 +153,8 @@ class Trainer:
 
     def save_checkpoint(self, name):
         checkpoint_path = os.path.join(self.config['save_dir'], name)
+        # 确保目录存在
+        os.makedirs(self.config['save_dir'], exist_ok=True)
         torch.save({
             'state_dict': self.model.state_dict(),
             'optimizer': self.optimizer.state_dict(),

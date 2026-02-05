@@ -13,16 +13,23 @@ class TrainingLogger:
     2. 文件日志记录
     3. 指标历史保存 (JSON)
     """
-    def __init__(self, log_dir='./logs', exp_name=None):
+    def __init__(self, log_dir='./logs', exp_name=None, create_exp_subdir=False):
         """
         Args:
-            log_dir: 日志保存根目录
+            log_dir: 日志保存目录
             exp_name: 实验名称,如果为None则自动生成时间戳
+            create_exp_subdir: 是否创建实验子目录 (默认False,直接使用log_dir)
         """
         self.log_dir = Path(log_dir)
         self.exp_name = exp_name or f"exp_{time.strftime('%Y%m%d_%H%M%S')}"
-        self.exp_dir = self.log_dir / self.exp_name
-        self.exp_dir.mkdir(parents=True, exist_ok=True)
+
+        # 根据参数决定是否创建实验子目录
+        if create_exp_subdir:
+            self.exp_dir = self.log_dir / self.exp_name
+            self.exp_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            self.exp_dir = self.log_dir
+            self.exp_dir.mkdir(parents=True, exist_ok=True)
 
         # 1. 设置文件日志
         log_file = self.exp_dir / 'train.log'
