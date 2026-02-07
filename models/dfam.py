@@ -12,11 +12,11 @@ class DFAM(nn.Module):
         self.num_bands = num_bands
         self.kernel_size = kernel_size
         self.in_channels = in_channels
+        self.freq_input_dim = in_channels * num_bands * 3 # 频率特征提取：每个频段提取 3 个统计量 (Mean, Max, Std)
         
-        # --- 修改这里：将 Conv2d 改为 Linear ---
-        # 因为在频域提取后，特征已经是 [B, C*num_bands] 的向量了
+        # 频率特征提取器
         self.freq_extractor = nn.Sequential(
-            nn.Linear(in_channels * num_bands, intermediate_dim),
+            nn.Linear(self.freq_input_dim, intermediate_dim),
             nn.LeakyReLU(0.2, inplace=True),
             nn.Linear(intermediate_dim, intermediate_dim),
             nn.LeakyReLU(0.2, inplace=True)
@@ -26,10 +26,8 @@ class DFAM(nn.Module):
         self.hyper_params = nn.Linear(intermediate_dim, intermediate_dim)
         
         # 分支 2: 退化类型预测
-        self.degrad_classifier = nn.Sequential(
-            nn.Linear(intermediate_dim, 4), 
-            nn.Softmax(dim=1)
-        )
+        # 这里的输出维度为 3，分别对应 Additive, Convolutional, Affine 三类退化
+        self.degrad_classifier = nn.Sequential(nn.Linear(intermediate_dim, 3))
 
         # 分支 3: 模糊核预测
         self.kernel_predictor = nn.Sequential(
@@ -39,7 +37,7 @@ class DFAM(nn.Module):
         )
 
         # 添加层归一化以提高稳定性
-        self.ln1 = nn.LayerNorm(in_channels * num_bands)
+        self.ln1 = nn.LayerNorm(self.freq_input_dim)
         self.ln2 = nn.LayerNorm(intermediate_dim)
 
     def forward(self, x):
@@ -64,17 +62,22 @@ class DFAM(nn.Module):
         pooled_features = []
         
         for i in range(self.num_bands):
-            # 简单的带通掩码
             lower = max_r * (i / self.num_bands)
             upper = max_r * ((i + 1) / self.num_bands)
-            mask = ((radius >= lower) & (radius < upper)).float()
+            mask = ((radius >= lower) & (radius < upper)).float().unsqueeze(0).unsqueeze(0)
             
-            # 提取该频段的统计特征 (均值)，形状 [B, C]
-            # mask 为 [H, W/2+1], mag 为 [B, C, H, W/2+1]
-            feat = (mag * mask.unsqueeze(0).unsqueeze(0)).sum(dim=(2, 3)) / (mask.sum() + 1e-6)
-            pooled_features.append(feat)
+            # 提取多维统计量信息
+            current_band = mag * mask
+            # 均值
+            m1 = current_band.sum(dim=(2, 3)) / (mask.sum() + 1e-6)
+            # 最大值
+            m2 = torch.amax(current_band, dim=(2, 3))
+            # 标准差 (反映频率分布的剧烈程度)
+            m3 = torch.sqrt(((current_band - m1.unsqueeze(-1).unsqueeze(-1))**2 * mask).sum(dim=(2,3)) / (mask.sum() + 1e-6))
             
-        # 拼接特征: [B, num_bands * C] (例如 16 * 12)
+            pooled_features.extend([m1, m2, m3])
+            
+        # 拼接特征: [B, num_bands * C * 3] (例如 16 * 12)
         base_feat_vec = torch.cat(pooled_features, dim=1)
         # 添加层归一化
         base_feat_vec = self.ln1(base_feat_vec)
@@ -88,9 +91,11 @@ class DFAM(nn.Module):
         # 3. 得到各个分支输出
         params = self.hyper_params(base_feat).view(batch, -1, 1, 1)
         params = torch.tanh(params) # 限制范围在 [-1, 1]
-        gates = self.degrad_classifier(base_feat)
-        raw_kernel = self.kernel_predictor(base_feat)
         
+        gates = self.degrad_classifier(base_feat)
+        gates = F.softmax(gates, dim=1)  # 转换为概率分布
+
+        raw_kernel = self.kernel_predictor(base_feat)
         # 限制 kernel 范围并归一化
         predicted_k = F.softmax(raw_kernel, dim=1).view(-1, 1, self.kernel_size, self.kernel_size)
 

@@ -12,6 +12,7 @@ import torchvision.transforms.functional as F
 from models.dfa_dun import DFA_DUN
 from utils.data_loader import Rain100LDataset
 import glob
+from piq import ssim
 
 def load_model(checkpoint_path, device, K=4):
     """加载训练好的模型"""
@@ -65,7 +66,6 @@ def save_comparison(rainy, output, gt, save_path, idx):
 
 def calculate_metrics(output, gt):
     """计算PSNR和SSIM"""
-    from sklearn.metrics import mean_squared_error
     import math
 
     # 转为numpy数组
@@ -81,7 +81,16 @@ def calculate_metrics(output, gt):
     else:
         psnr = 20 * math.log10(1.0 / math.sqrt(mse))
 
-    return psnr
+    # 计算SSIM (使用piq库)
+    # piq.ssim需要输入格式为[B, C, H, W]，范围[0, 1]
+    # 先裁剪到[0, 1]范围内以避免浮点误差导致的负值或超限值
+    output_clamped = torch.clamp(output, 0.0, 1.0)
+    gt_clamped = torch.clamp(gt, 0.0, 1.0)
+    output_batch = output_clamped.unsqueeze(0)  # [1, C, H, W]
+    gt_batch = gt_clamped.unsqueeze(0)  # [1, C, H, W]
+    ssim_value = ssim(output_batch, gt_batch, data_range=1.0)
+
+    return psnr, ssim_value.item()
 
 def test_single_images(model, device, data_dir, num_samples=10, save_dir='results'):
     """测试单张图片并保存结果"""
@@ -94,6 +103,7 @@ def test_single_images(model, device, data_dir, num_samples=10, save_dir='result
     print("=" * 60)
 
     total_psnr = 0
+    total_ssim = 0
 
     with torch.no_grad():
         for idx, rainy_path in enumerate(rainy_images):
@@ -124,21 +134,23 @@ def test_single_images(model, device, data_dir, num_samples=10, save_dir='result
             save_path = os.path.join(save_dir, f'comparison_{idx+1:03d}.png')
             save_comparison(rainy_cropped, output_img, gt_cropped, save_path, idx)
 
-            # 计算PSNR
-            psnr = calculate_metrics(output[0], gt_tensor)
+            # 计算PSNR和SSIM
+            psnr, ssim_value = calculate_metrics(output[0], gt_tensor)
             total_psnr += psnr
+            total_ssim += ssim_value
 
             # 打印第一个stage的gate概率
             print(f"\n[{idx+1}/{len(rainy_images)}] {basename}")
-            print(f"  PSNR: {psnr:.2f} dB")
+            print(f"  PSNR: {psnr:.2f} dB | SSIM: {ssim_value:.4f}")
             if len(probs) > 0:
                 gate_probs = probs[0][0].cpu().numpy()  # [4]
                 print(f"  Gate probs: Identity={gate_probs[0]:.3f}, Blur={gate_probs[1]:.3f}, "
                       f"Noise={gate_probs[2]:.3f}, Loss={gate_probs[3]:.3f}")
 
     avg_psnr = total_psnr / len(rainy_images)
+    avg_ssim = total_ssim / len(rainy_images)
     print("\n" + "=" * 60)
-    print(f"Average PSNR: {avg_psnr:.2f} dB over {len(rainy_images)} images")
+    print(f"Average PSNR: {avg_psnr:.2f} dB | Average SSIM: {avg_ssim:.4f} over {len(rainy_images)} images")
     print("=" * 60)
 
 def test_with_dataloader(model, device, data_dir, batch_size=1, num_batches=10, save_dir='results'):
@@ -153,6 +165,7 @@ def test_with_dataloader(model, device, data_dir, batch_size=1, num_batches=10, 
     print("=" * 60)
 
     total_psnr = 0
+    total_ssim = 0
     count = 0
 
     with torch.no_grad():
@@ -176,22 +189,24 @@ def test_with_dataloader(model, device, data_dir, batch_size=1, num_batches=10, 
 
                 save_comparison(rainy_img, output_img, gt_img, save_path, batch_idx * batch_size + i)
 
-                # 计算PSNR
-                psnr = calculate_metrics(output[i], gt[i])
+                # 计算PSNR和SSIM
+                psnr, ssim_value = calculate_metrics(output[i], gt[i])
                 total_psnr += psnr
+                total_ssim += ssim_value
                 count += 1
 
                 # 打印gate概率
                 if len(probs) > 0:
                     gate_probs = probs[0][i].cpu().numpy()
                     print(f"\n[Batch {batch_idx+1}, Sample {i+1}]")
-                    print(f"  PSNR: {psnr:.2f} dB")
+                    print(f"  PSNR: {psnr:.2f} dB | SSIM: {ssim_value:.4f}")
                     print(f"  Gate probs: Identity={gate_probs[0]:.3f}, Blur={gate_probs[1]:.3f}, "
                           f"Noise={gate_probs[2]:.3f}, Loss={gate_probs[3]:.3f}")
 
     avg_psnr = total_psnr / count if count > 0 else 0
+    avg_ssim = total_ssim / count if count > 0 else 0
     print("\n" + "=" * 60)
-    print(f"Average PSNR: {avg_psnr:.2f} dB over {count} images")
+    print(f"Average PSNR: {avg_psnr:.2f} dB | Average SSIM: {avg_ssim:.4f} over {count} images")
     print("=" * 60)
 
 def main():
